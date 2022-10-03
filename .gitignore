@@ -1,0 +1,7 @@
+*.out
+*.out.dSYM
+.vscode
+*.sh
+hw1
+
+!testcases/*
