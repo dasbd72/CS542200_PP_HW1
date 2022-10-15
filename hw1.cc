@@ -1,9 +1,9 @@
-#include <cstdio>
-#include <cstdlib>
 #include <mpi.h>
 
-int main(int argc, char **argv)
-{
+#include <cstdio>
+#include <cstdlib>
+
+int main(int argc, char **argv) {
     MPI_Init(&argc, &argv);
 
     int rank, size;
@@ -22,11 +22,10 @@ int main(int argc, char **argv)
 
     printf("rank %d got float: %f\n", rank, data[0]);
 
-    MPI_File_open(MPI_COMM_WORLD, output_filename, MPI_MODE_CREATE|MPI_MODE_WRONLY, MPI_INFO_NULL, &output_file);
+    MPI_File_open(MPI_COMM_WORLD, output_filename, MPI_MODE_CREATE | MPI_MODE_WRONLY, MPI_INFO_NULL, &output_file);
     MPI_File_write_at(output_file, sizeof(float) * rank, data, 1, MPI_FLOAT, MPI_STATUS_IGNORE);
     MPI_File_close(&output_file);
 
     MPI_Finalize();
     return 0;
 }
-
