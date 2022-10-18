@@ -1,7 +1,8 @@
-#define DEBUG
+// #define DEBUG
 #include <mpi.h>
 
 #include <algorithm>
+#include <boost/sort/spreadsort/spreadsort.hpp>
 #include <cmath>
 #include <compare>
 #include <cstdio>
@@ -34,17 +35,16 @@
     } while (false);
 #endif
 
-int compare(const void *a, const void *b);
-bool merge(int ln, float *larr, int rn, float *rarr, float *tmparr);
-bool merge_low(int ln, float *larr, int rn, float *rarr, float *tmparr);
-bool merge_high(int ln, float *larr, int rn, float *rarr, float *tmparr);
+void MPI_merge(int ln, float *&larr, int rn, float *&rarr, float *&tmparr);
+void MPI_merge_low(int ln, float *&larr, int rn, float *rarr, float *&tmparr);
+void MPI_merge_high(int ln, float *larr, int rn, float *&rarr, float *&tmparr);
 int main(int argc, char **argv) {
     MPI_Init(&argc, &argv);
 
     int world_rank, world_size;
     MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
     MPI_Comm_size(MPI_COMM_WORLD, &world_size);
-    
+
     int array_size = std::stoi(argv[1]);
     char *input_filename = argv[2];
     char *output_filename = argv[3];
@@ -54,9 +54,14 @@ int main(int argc, char **argv) {
     int step, remain, count, start;
     int odd_rank = -1, even_rank = -1;
     int odd_count = 0, even_count = 0;
+    float recv_val;
     float *local_data = NULL, *recv_data = NULL, *temp_data = NULL;
-    bool all_sorted, part_sorted;
+    bool phase_sorted;
+#ifdef DEBUG
     double start_time, duration, sum_duration, max_duration;
+    double sendrecv_start_time, sendrecv_duration, sum_sendrecv_duration, max_sendrecv_duration;
+    double MPI_merge_start_time, MPI_merge_duration, sum_MPI_merge_duration, max_MPI_merge_duration;
+#endif
 
     /* Calculate index */
     target_world_size = std::max(std::min(world_size, array_size / MIN_PROC_N), 1);
@@ -73,12 +78,12 @@ int main(int argc, char **argv) {
         start = array_size;
     }
 
-    if (world_rank % 2 == 0) {
-        odd_rank = world_rank - 1;
-        even_rank = world_rank + 1;
-    } else {
+    if (world_rank & 1) {
         odd_rank = world_rank + 1;
         even_rank = world_rank - 1;
+    } else {
+        odd_rank = world_rank - 1;
+        even_rank = world_rank + 1;
     }
     if (odd_rank < 0 || odd_rank >= target_world_size || world_rank >= target_world_size) {
         odd_rank = MPI_PROC_NULL;
@@ -107,82 +112,143 @@ int main(int argc, char **argv) {
 
     DEBUG_PRINT("rank: %d %d %d, count: %d %d %d\n", world_rank, odd_rank, even_rank, count, odd_count, even_count);
     /* Read input */
-    // start_time = MPI_Wtime();
-    local_data = new float[count];
+#ifdef DEBUG
+    start_time = MPI_Wtime();
+#endif
+    local_data = new float[step + 1];
     MPI_File_open(MPI_COMM_WORLD, input_filename, MPI_MODE_RDONLY, MPI_INFO_NULL, &input_file);
     MPI_File_read_at(input_file, sizeof(float) * start, local_data, count, MPI_FLOAT, MPI_STATUS_IGNORE);
     MPI_File_close(&input_file);
-    // duration = MPI_Wtime() - start_time;
-    // MPI_Reduce(&duration, &sum_duration, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-    // MPI_Reduce(&duration, &max_duration, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
-    // if (world_rank == 0) {
-    //     DEBUG_PRINT("Read IO: %lf, %lf\n", sum_duration / world_size, max_duration);
-    // }
+#ifdef DEBUG
+    duration = MPI_Wtime() - start_time;
+    MPI_Reduce(&duration, &sum_duration, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&duration, &max_duration, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+    if (world_rank == 0) {
+        DEBUG_PRINT("Read IO: %lf, %lf\n", sum_duration / world_size, max_duration);
+    }
+#endif
 
     /* Local sort */
-    // start_time = MPI_Wtime();
-    std::sort(local_data, local_data + count);
-    // std::qsort(local_data, count, sizeof(float), compare);
-    // duration = MPI_Wtime() - start_time;
-    // MPI_Reduce(&duration, &sum_duration, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-    // MPI_Reduce(&duration, &max_duration, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
-    // if (world_rank == 0) {
-    //     DEBUG_PRINT("Local sort: %lf, %lf\n", sum_duration / world_size, max_duration);
-    // }
+#ifdef DEBUG
+    start_time = MPI_Wtime();
+#endif
+    boost::sort::spreadsort::spreadsort(local_data, local_data + count);
+#ifdef DEBUG
+    duration = MPI_Wtime() - start_time;
+    MPI_Reduce(&duration, &sum_duration, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&duration, &max_duration, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+    if (world_rank == 0) {
+        DEBUG_PRINT("Local sort: %lf, %lf\n", sum_duration / world_size, max_duration);
+    }
+#endif
 
     /* Sorting */
-    // start_time = MPI_Wtime();
+#ifdef DEBUG
+    start_time = MPI_Wtime();
+    sendrecv_duration = 0.0;
+#endif
     temp_data = new float[step + 1];
     recv_data = new float[step + 1];
-    all_sorted = false;
-    while (!all_sorted) {
-        part_sorted = true;
-        if (odd_rank != MPI_PROC_NULL) { /* Odd phase */
-            MPI_Sendrecv(local_data, count, MPI_FLOAT, odd_rank, 0, recv_data, odd_count, MPI_FLOAT, odd_rank, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            if (world_rank < odd_rank) {
-                if (!merge_low(count, local_data, odd_count, recv_data, temp_data))
-                    part_sorted = false;
-            } else {
-                if (!merge_high(odd_count, recv_data, count, local_data, temp_data))
-                    part_sorted = false;
+#pragma GCC unroll 50
+    for (int p = 0; p < target_world_size + 1; p++) {
+        if (p & 1) {
+            if (odd_rank != MPI_PROC_NULL) { /* Odd phase */
+                phase_sorted = true;
+                if (world_rank & 1) {
+                    MPI_Sendrecv(local_data + count - 1, 1, MPI_FLOAT, odd_rank, 0, &recv_val, 1, MPI_FLOAT, odd_rank, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                    if (local_data[count - 1] > recv_val)
+                        phase_sorted = false;
+                } else {
+                    MPI_Sendrecv(local_data, 1, MPI_FLOAT, odd_rank, 0, &recv_val, 1, MPI_FLOAT, odd_rank, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                    if (local_data[0] < recv_val)
+                        phase_sorted = false;
+                }
+                if (!phase_sorted) {
+#ifdef DEBUG
+                    sendrecv_start_time = MPI_Wtime();
+#endif
+                    MPI_Sendrecv(local_data, count, MPI_FLOAT, odd_rank, 0, recv_data, odd_count, MPI_FLOAT, odd_rank, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+#ifdef DEBUG
+                    sendrecv_duration += MPI_Wtime() - sendrecv_start_time;
+                    MPI_merge_start_time = MPI_Wtime();
+#endif
+                    if (world_rank & 1) {
+                        MPI_merge_low(count, local_data, odd_count, recv_data, temp_data);
+                    } else {
+                        MPI_merge_high(odd_count, recv_data, count, local_data, temp_data);
+                    }
+#ifdef DEBUG
+                    MPI_merge_duration += MPI_Wtime() - MPI_merge_start_time;
+#endif
+                }
+            }
+        } else {
+            if (even_rank != MPI_PROC_NULL) { /* Even phase */
+                phase_sorted = true;
+                if (world_rank & 1) {
+                    MPI_Sendrecv(local_data, 1, MPI_FLOAT, even_rank, 0, &recv_val, 1, MPI_FLOAT, even_rank, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                    if (local_data[0] < recv_val)
+                        phase_sorted = false;
+                } else {
+                    MPI_Sendrecv(local_data + count - 1, 1, MPI_FLOAT, even_rank, 0, &recv_val, 1, MPI_FLOAT, even_rank, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                    if (local_data[count - 1] > recv_val)
+                        phase_sorted = false;
+                }
+                if (!phase_sorted) {
+#ifdef DEBUG
+                    sendrecv_start_time = MPI_Wtime();
+#endif
+                    MPI_Sendrecv(local_data, count, MPI_FLOAT, even_rank, 0, recv_data, even_count, MPI_FLOAT, even_rank, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+#ifdef DEBUG
+                    sendrecv_duration += MPI_Wtime() - sendrecv_start_time;
+                    MPI_merge_start_time = MPI_Wtime();
+#endif
+                    if (world_rank & 1) {
+                        MPI_merge_high(even_count, recv_data, count, local_data, temp_data);
+                    } else {
+                        MPI_merge_low(count, local_data, even_count, recv_data, temp_data);
+                    }
+#ifdef DEBUG
+                    MPI_merge_duration += MPI_Wtime() - MPI_merge_start_time;
+#endif
+                }
             }
         }
-        if (even_rank != MPI_PROC_NULL) { /* Even phase */
-            MPI_Sendrecv(local_data, count, MPI_FLOAT, even_rank, 0, recv_data, even_count, MPI_FLOAT, even_rank, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            if (world_rank < even_rank) {
-                if (!merge_low(count, local_data, even_count, recv_data, temp_data))
-                    part_sorted = false;
-            } else {
-                if (!merge_high(even_count, recv_data, count, local_data, temp_data))
-                    part_sorted = false;
-            }
-        }
-        MPI_EXECUTE(MPI_Allreduce(&part_sorted, &all_sorted, 1, MPI_CXX_BOOL, MPI_LAND, MPI_COMM_WORLD));
     }
-    // duration = MPI_Wtime() - start_time;
-    // MPI_Reduce(&duration, &sum_duration, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-    // MPI_Reduce(&duration, &max_duration, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
-    // if (world_rank == 0) {
-    //     DEBUG_PRINT("Global sort: %lf, %lf\n", sum_duration / world_size, max_duration);
-    // }
-
-    // #ifdef DEBUG
-    //     for (int i = 0; i < count; i++) {
-    //         DEBUG_PRINT("rank %d: %f\n", world_rank, local_data[i]);
-    //     }
-    // #endif
+#ifdef DEBUG
+    duration = MPI_Wtime() - start_time;
+    MPI_Reduce(&sendrecv_duration, &sum_sendrecv_duration, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&sendrecv_duration, &max_sendrecv_duration, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+    if (world_rank == 0) {
+        DEBUG_PRINT("Sendrecv: %lf, %lf\n", sum_sendrecv_duration / world_size, max_sendrecv_duration);
+    }
+    MPI_Reduce(&MPI_merge_duration, &sum_MPI_merge_duration, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&MPI_merge_duration, &max_MPI_merge_duration, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+    if (world_rank == 0) {
+        DEBUG_PRINT("merging: %lf, %lf\n", sum_MPI_merge_duration / world_size, max_MPI_merge_duration);
+    }
+    MPI_Reduce(&duration, &sum_duration, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&duration, &max_duration, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+    if (world_rank == 0) {
+        DEBUG_PRINT("Global sort: %lf, %lf\n", sum_duration / world_size, max_duration);
+    }
+#endif
 
     /* Write output */
-    // start_time = MPI_Wtime();
+#ifdef DEBUG
+    start_time = MPI_Wtime();
+#endif
     MPI_File_open(MPI_COMM_WORLD, output_filename, MPI_MODE_CREATE | MPI_MODE_WRONLY, MPI_INFO_NULL, &output_file);
     MPI_File_write_at(output_file, sizeof(float) * start, local_data, count, MPI_FLOAT, MPI_STATUS_IGNORE);
     MPI_File_close(&output_file);
-    // duration = MPI_Wtime() - start_time;
-    // MPI_Reduce(&duration, &sum_duration, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-    // MPI_Reduce(&duration, &max_duration, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
-    // if (world_rank == 0) {
-    //     DEBUG_PRINT("Output IO: %lf, %lf\n", sum_duration / world_size, max_duration);
-    // }
+#ifdef DEBUG
+    duration = MPI_Wtime() - start_time;
+    MPI_Reduce(&duration, &sum_duration, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&duration, &max_duration, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+    if (world_rank == 0) {
+        DEBUG_PRINT("Output IO: %lf, %lf\n", sum_duration / world_size, max_duration);
+    }
+#endif
 
     /* Finalize program */
     delete[] temp_data;
@@ -192,27 +258,14 @@ int main(int argc, char **argv) {
     return 0;
 }
 
-int compare(const void *a, const void *b) {
-    float val1 = *(float *)a;
-    float val2 = *(float *)b;
-    if (val1 > val2)
-        return 1;
-    else if (val1 == val2)
-        return 0;
-    else
-        return -1;
-}
-
-bool merge(int ln, float *larr, int rn, float *rarr, float *tmparr) {
+void MPI_merge(int ln, float *larr, int rn, float *rarr, float *tmparr) {
     int li, ri, ti;
-    bool retVal = true;
     li = ri = ti = 0;
     while (li < ln && ri < rn) {
         if (larr[li] <= rarr[ri]) {
             tmparr[ti++] = larr[li++];
         } else {
             tmparr[ti++] = rarr[ri++];
-            retVal = false;
         }
     }
     while (li < ln) {
@@ -229,19 +282,19 @@ bool merge(int ln, float *larr, int rn, float *rarr, float *tmparr) {
     while (ri < rn) {
         rarr[ri++] = tmparr[ti++];
     }
-    return retVal;
+    return;
 }
 
-bool merge_low(int ln, float *larr, int rn, float *rarr, float *tmparr) {
+void MPI_merge_low(int ln, float *&larr, int rn, float *rarr, float *&tmparr) {
+    if (larr[ln - 1] <= rarr[0])
+        return;
     int li, ri, ti;
-    bool retVal = true;
     li = ri = ti = 0;
     while (li < ln && ri < rn && ti < ln) {
         if (larr[li] <= rarr[ri]) {
             tmparr[ti++] = larr[li++];
         } else {
             tmparr[ti++] = rarr[ri++];
-            retVal = false;
         }
     }
     while (li < ln && ti < ln) {
@@ -250,16 +303,14 @@ bool merge_low(int ln, float *larr, int rn, float *rarr, float *tmparr) {
     while (ri < rn && ti < ln) {
         tmparr[ti++] = rarr[ri++];
     }
-
-    for (li = 0; li < ln; li++) {
-        larr[li] = tmparr[li];
-    }
-    return retVal;
+    std::swap(larr, tmparr);
+    return;
 }
 
-bool merge_high(int ln, float *larr, int rn, float *rarr, float *tmparr) {
+void MPI_merge_high(int ln, float *larr, int rn, float *&rarr, float *&tmparr) {
+    if (larr[ln - 1] <= rarr[0])
+        return;
     int li, ri, ti;
-    bool retVal = true;
     li = ln - 1;
     ti = ri = rn - 1;
     while (li >= 0 && ri >= 0 && ti >= 0) {
@@ -267,7 +318,6 @@ bool merge_high(int ln, float *larr, int rn, float *rarr, float *tmparr) {
             tmparr[ti--] = rarr[ri--];
         } else {
             tmparr[ti--] = larr[li--];
-            retVal = false;
         }
     }
     while (li >= 0 && ti >= 0) {
@@ -276,9 +326,6 @@ bool merge_high(int ln, float *larr, int rn, float *rarr, float *tmparr) {
     while (ri >= 0 && ti >= 0) {
         tmparr[ti--] = rarr[ri--];
     }
-
-    for (ri = 0; ri < rn; ri++) {
-        rarr[ri] = tmparr[ri];
-    }
-    return retVal;
+    std::swap(rarr, tmparr);
+    return;
 }
