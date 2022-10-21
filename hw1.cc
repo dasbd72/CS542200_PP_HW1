@@ -155,16 +155,20 @@ int main(int argc, char **argv) {
     TIMING_START();
     local_data = new float[step + 1];
     MPI_File_open(MPI_COMM_WORLD, input_filename, MPI_MODE_RDONLY, MPI_INFO_NULL, &input_file);
-    MPI_File_read_at(input_file, sizeof(float) * start, local_data, count, MPI_FLOAT, MPI_STATUS_IGNORE);
+    if (count != 0) {
+        MPI_File_read_at(input_file, sizeof(float) * start, local_data, count, MPI_FLOAT, MPI_STATUS_IGNORE);
+    }
     MPI_File_close(&input_file);
     TIMING_END("Read IO");
 
     /* Local sort */
     TIMING_START();
-    // std::sort(local_data, local_data + count);
-    // boost::sort::pdqsort(local_data, local_data + count);
-    // boost::sort::spreadsort::float_sort(local_data, local_data + count);
-    boost::sort::spreadsort::spreadsort(local_data, local_data + count);
+    if (count != 0) {
+        // std::sort(local_data, local_data + count);
+        // boost::sort::pdqsort(local_data, local_data + count);
+        // boost::sort::spreadsort::float_sort(local_data, local_data + count);
+        boost::sort::spreadsort::spreadsort(local_data, local_data + count);
+    }
     TIMING_END("Local Sort");
 
     /* Sorting */
@@ -215,7 +219,9 @@ int main(int argc, char **argv) {
     /* Write output */
     TIMING_START();
     MPI_File_open(MPI_COMM_WORLD, output_filename, MPI_MODE_CREATE | MPI_MODE_WRONLY, MPI_INFO_NULL, &output_file);
-    MPI_File_write_at(output_file, sizeof(float) * start, local_data, count, MPI_FLOAT, MPI_STATUS_IGNORE);
+    if (count != 0) {
+        MPI_File_write_at(output_file, sizeof(float) * start, local_data, count, MPI_FLOAT, MPI_STATUS_IGNORE);
+    }
     MPI_File_close(&output_file);
     TIMING_END("Output IO");
 
