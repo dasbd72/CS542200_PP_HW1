@@ -1,4 +1,4 @@
-// #define DEBUG
+#define DEBUG
 #include <mpi.h>
 
 #include <algorithm>
@@ -203,7 +203,7 @@ int main(int argc, char **argv) {
     SENDRECV_TIMING_START();
     MERGE_TIMING_START();
     TIMING_START();
-    temp_data = new float[step + 1];
+    temp_data = new float[2 * step + 2];
     recv_data = new float[step + 1];
     for (int p = 0; p < target_world_size + 1; p++) {
         if (p & 1) {
@@ -265,40 +265,47 @@ int main(int argc, char **argv) {
 void MPI_merge_low(int ln, float *&larr, int rn, float *rarr, float *&tmparr) {
     int li, ri, ti;
     li = ri = ti = 0;
-    while (li < ln && ri < rn && ti < ln) {
+    while (li < ln && ri < rn) {
         if (larr[li] <= rarr[ri]) {
             tmparr[ti++] = larr[li++];
         } else {
             tmparr[ti++] = rarr[ri++];
         }
     }
-    while (li < ln && ti < ln) {
+    while (li < ln) {
         tmparr[ti++] = larr[li++];
     }
-    while (ri < rn && ti < ln) {
+    while (ri < rn) {
         tmparr[ti++] = rarr[ri++];
     }
-    std::swap(larr, tmparr);
+    li = 0;
+    ti = 0;
+    while(li < ln) {
+        larr[li++] = tmparr[ti++];
+    }
     return;
 }
 
 void MPI_merge_high(int ln, float *larr, int rn, float *&rarr, float *&tmparr) {
     int li, ri, ti;
-    li = ln - 1;
-    ti = ri = rn - 1;
-    while (li >= 0 && ri >= 0 && ti >= 0) {
+    li = ri = ti = 0;
+    while (li < ln && ri < rn) {
         if (larr[li] <= rarr[ri]) {
-            tmparr[ti--] = rarr[ri--];
+            tmparr[ti++] = larr[li++];
         } else {
-            tmparr[ti--] = larr[li--];
+            tmparr[ti++] = rarr[ri++];
         }
     }
-    while (li >= 0 && ti >= 0) {
-        tmparr[ti--] = larr[li--];
+    while (li < ln) {
+        tmparr[ti++] = larr[li++];
     }
-    while (ri >= 0 && ti >= 0) {
-        tmparr[ti--] = rarr[ri--];
+    while (ri < rn) {
+        tmparr[ti++] = rarr[ri++];
     }
-    std::swap(rarr, tmparr);
+    ri = 0;
+    ti = ln;
+    while(ri < rn) {
+        rarr[ri++] = tmparr[ti++];
+    }
     return;
 }

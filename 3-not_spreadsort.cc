@@ -1,4 +1,4 @@
-// #define DEBUG
+#define DEBUG
 #include <mpi.h>
 
 #include <algorithm>
@@ -192,10 +192,7 @@ int main(int argc, char **argv) {
     /* Local sort */
     TIMING_START();
     if (count != 0) {
-        // std::sort(local_data, local_data + count);
-        // boost::sort::pdqsort(local_data, local_data + count);
-        // boost::sort::spreadsort::float_sort(local_data, local_data + count);
-        boost::sort::spreadsort::spreadsort(local_data, local_data + count);
+        std::sort(local_data, local_data + count);
     }
     TIMING_END("Local Sort");
 
@@ -203,39 +200,29 @@ int main(int argc, char **argv) {
     SENDRECV_TIMING_START();
     MERGE_TIMING_START();
     TIMING_START();
-    temp_data = new float[step + 1];
+    temp_data = new float[2 * step + 2];
     recv_data = new float[step + 1];
     for (int p = 0; p < target_world_size + 1; p++) {
         if (p & 1) {
             if (odd_rank != MPI_PROC_NULL) { /* Odd phase */
                 if (world_rank & 1) {
-                    SENDRECV_FUNC(MPI_Sendrecv(local_data + count - 1, 1, MPI_FLOAT, odd_rank, 0, &recv_val, 1, MPI_FLOAT, odd_rank, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE));
-                    if (local_data[count - 1] > recv_val) {
-                        SENDRECV_FUNC(MPI_Sendrecv(local_data, count, MPI_FLOAT, odd_rank, 0, recv_data, odd_count, MPI_FLOAT, odd_rank, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE));
-                        MERGE_FUNC(MPI_merge_low(count, local_data, odd_count, recv_data, temp_data));
-                    }
+                    SENDRECV_FUNC(MPI_Sendrecv(local_data, count, MPI_FLOAT, odd_rank, 0, recv_data, odd_count, MPI_FLOAT, odd_rank, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE));
+                    MERGE_FUNC(MPI_merge_low(count, local_data, odd_count, recv_data, temp_data));
+
                 } else {
-                    SENDRECV_FUNC(MPI_Sendrecv(local_data, 1, MPI_FLOAT, odd_rank, 0, &recv_val, 1, MPI_FLOAT, odd_rank, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE));
-                    if (local_data[0] < recv_val) {
-                        SENDRECV_FUNC(MPI_Sendrecv(local_data, count, MPI_FLOAT, odd_rank, 0, recv_data, odd_count, MPI_FLOAT, odd_rank, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE));
-                        MERGE_FUNC(MPI_merge_high(odd_count, recv_data, count, local_data, temp_data));
-                    }
+                    SENDRECV_FUNC(MPI_Sendrecv(local_data, count, MPI_FLOAT, odd_rank, 0, recv_data, odd_count, MPI_FLOAT, odd_rank, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE));
+                    MERGE_FUNC(MPI_merge_high(odd_count, recv_data, count, local_data, temp_data));
                 }
             }
         } else {
             if (even_rank != MPI_PROC_NULL) { /* Even phase */
                 if (world_rank & 1) {
-                    SENDRECV_FUNC(MPI_Sendrecv(local_data, 1, MPI_FLOAT, even_rank, 0, &recv_val, 1, MPI_FLOAT, even_rank, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE));
-                    if (local_data[0] < recv_val) {
-                        SENDRECV_FUNC(MPI_Sendrecv(local_data, count, MPI_FLOAT, even_rank, 0, recv_data, even_count, MPI_FLOAT, even_rank, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE));
-                        MERGE_FUNC(MPI_merge_high(even_count, recv_data, count, local_data, temp_data));
-                    }
+                    SENDRECV_FUNC(MPI_Sendrecv(local_data, count, MPI_FLOAT, even_rank, 0, recv_data, even_count, MPI_FLOAT, even_rank, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE));
+                    MERGE_FUNC(MPI_merge_high(even_count, recv_data, count, local_data, temp_data));
+
                 } else {
-                    SENDRECV_FUNC(MPI_Sendrecv(local_data + count - 1, 1, MPI_FLOAT, even_rank, 0, &recv_val, 1, MPI_FLOAT, even_rank, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE));
-                    if (local_data[count - 1] > recv_val) {
-                        SENDRECV_FUNC(MPI_Sendrecv(local_data, count, MPI_FLOAT, even_rank, 0, recv_data, even_count, MPI_FLOAT, even_rank, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE));
-                        MERGE_FUNC(MPI_merge_low(count, local_data, even_count, recv_data, temp_data));
-                    }
+                    SENDRECV_FUNC(MPI_Sendrecv(local_data, count, MPI_FLOAT, even_rank, 0, recv_data, even_count, MPI_FLOAT, even_rank, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE));
+                    MERGE_FUNC(MPI_merge_low(count, local_data, even_count, recv_data, temp_data));
                 }
             }
         }
@@ -265,40 +252,47 @@ int main(int argc, char **argv) {
 void MPI_merge_low(int ln, float *&larr, int rn, float *rarr, float *&tmparr) {
     int li, ri, ti;
     li = ri = ti = 0;
-    while (li < ln && ri < rn && ti < ln) {
+    while (li < ln && ri < rn) {
         if (larr[li] <= rarr[ri]) {
             tmparr[ti++] = larr[li++];
         } else {
             tmparr[ti++] = rarr[ri++];
         }
     }
-    while (li < ln && ti < ln) {
+    while (li < ln) {
         tmparr[ti++] = larr[li++];
     }
-    while (ri < rn && ti < ln) {
+    while (ri < rn) {
         tmparr[ti++] = rarr[ri++];
     }
-    std::swap(larr, tmparr);
+    li = 0;
+    ti = 0;
+    while (li < ln) {
+        larr[li++] = tmparr[ti++];
+    }
     return;
 }
 
 void MPI_merge_high(int ln, float *larr, int rn, float *&rarr, float *&tmparr) {
     int li, ri, ti;
-    li = ln - 1;
-    ti = ri = rn - 1;
-    while (li >= 0 && ri >= 0 && ti >= 0) {
+    li = ri = ti = 0;
+    while (li < ln && ri < rn) {
         if (larr[li] <= rarr[ri]) {
-            tmparr[ti--] = rarr[ri--];
+            tmparr[ti++] = larr[li++];
         } else {
-            tmparr[ti--] = larr[li--];
+            tmparr[ti++] = rarr[ri++];
         }
     }
-    while (li >= 0 && ti >= 0) {
-        tmparr[ti--] = larr[li--];
+    while (li < ln) {
+        tmparr[ti++] = larr[li++];
     }
-    while (ri >= 0 && ti >= 0) {
-        tmparr[ti--] = rarr[ri--];
+    while (ri < rn) {
+        tmparr[ti++] = rarr[ri++];
     }
-    std::swap(rarr, tmparr);
+    ri = 0;
+    ti = ln;
+    while (ri < rn) {
+        rarr[ri++] = tmparr[ti++];
+    }
     return;
 }
