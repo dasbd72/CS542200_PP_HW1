@@ -3,5 +3,6 @@
 .vscode
 *.sh
 hw1
+generate_testcase
 
-!testcases/*
+experiment
